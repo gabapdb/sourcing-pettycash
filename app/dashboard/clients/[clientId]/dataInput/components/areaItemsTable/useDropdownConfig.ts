@@ -1,95 +1,101 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import {
+  collection,
+  addDoc,
+  onSnapshot,
+  query,
+  orderBy,
+  Timestamp,
+} from "firebase/firestore";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { db } from "@/lib/firebase";
+import toast from "react-hot-toast";
 
 /**
- * 🔹 Reusable Firestore dropdown config hook
- *
- * Handles dynamic dropdown lists such as:
- * - sourcingTypes
- * - sourcingStores
- * - units
- *
- * Usage:
- * const { options, addOption, loading } = useDropdownConfig(
- *   clientId,
- *   "sourcingTypes",
- *   ["Electrical", "Plumbing", "Finishing"]
- * );
+ * 🔹 useDropdownConfig
+ * Handles Firestore-backed dropdowns (e.g. Types, Stores)
+ * Provides live sync, loading states, and safe add operations.
  */
-
 export function useDropdownConfig(
   clientId: string,
-  configName: "sourcingTypes" | "sourcingStores" | "units" | string,
+  configName: string,
   defaultValues: string[]
 ) {
   const [options, setOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
-  /** 🔹 Load options from Firestore or create default config */
-  const loadOptions = useCallback(async () => {
-    const configRef = doc(db, "clients", clientId, "config", configName);
+  // ✅ Stable reference for Firestore collection
+  const configRef = useMemo(
+  () =>
+    collection(
+      db,
+      "clients",
+      clientId,
+      "dropdownConfigs",
+      configName,
+      "options"
+    ),
+  [clientId, configName]
+);
 
-    try {
-      const snap = await getDoc(configRef);
 
-      if (!snap.exists()) {
-        // Create document with default values
-        await setDoc(configRef, { [getFieldName(configName)]: defaultValues });
-        setOptions(defaultValues);
-      } else {
-        const data = snap.data() as Record<string, string[]>;
-        const field = getFieldName(configName);
-        setOptions(data[field] || defaultValues);
+  // 🔹 Live Firestore listener
+  useEffect(() => {
+    if (!clientId || !configName) return;
+
+    const q = query(configRef, orderBy("createdAt", "asc"));
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const list = snapshot.docs.map((docSnap) => {
+          const data = docSnap.data() as { value: string };
+          return data.value;
+        });
+
+        const combined = Array.from(new Set([...defaultValues, ...list]));
+        setOptions(combined);
+        setLoading(false);
+      },
+      (err) => {
+        console.error("❌ Firestore dropdown listener error:", err);
+        toast.error(`Failed to sync ${configName} options.`);
+        setLoading(false);
       }
-    } catch (err) {
-      console.error(`Error loading ${configName} config:`, err);
-      setOptions(defaultValues);
-    } finally {
-      setLoading(false);
-    }
-  }, [clientId, configName, defaultValues]);
+    );
 
-  /** 🔹 Add new dropdown option */
+    return () => unsubscribe();
+  }, [clientId, configName, defaultValues, configRef]);
+
+  // 🔹 Add new dropdown option
   const addOption = useCallback(
-    async (newOption: string) => {
-      const trimmed = newOption.trim();
-      if (!trimmed || options.includes(trimmed)) return;
-
-      const configRef = doc(db, "clients", clientId, "config", configName);
-      const updated = [...options, trimmed];
-      const field = getFieldName(configName);
+    async (newValue: string) => {
+      const trimmed = newValue.trim();
+      if (!trimmed) return;
 
       try {
-        await updateDoc(configRef, { [field]: updated });
-        setOptions(updated);
+        const exists = options.some(
+          (opt) => opt.toLowerCase() === trimmed.toLowerCase()
+        );
+        if (exists) {
+          toast.error(`"${trimmed}" already exists.`);
+          return;
+        }
+
+        await addDoc(configRef, {
+          value: trimmed,
+          createdAt: Timestamp.now(),
+        });
+
+        toast.success(`Added new ${configName.slice(8).toLowerCase()}: "${trimmed}"`);
       } catch (err) {
-        console.error(`Error updating ${configName} config:`, err);
+        console.error(`❌ Error adding ${configName}:`, err);
+        toast.error(`Failed to add ${configName}.`);
       }
     },
-    [clientId, configName, options]
+    [configRef, configName, options]
   );
 
-  /** 🔹 Auto-load config on mount */
-  useEffect(() => {
-    void loadOptions();
-  }, [loadOptions]);
-
-  return { options, addOption, loading };
-}
-
-/** 🔹 Maps configName to its Firestore field key */
-function getFieldName(configName: string): string {
-  switch (configName) {
-    case "sourcingTypes":
-      return "types";
-    case "sourcingStores":
-      return "stores";
-    case "units":
-      return "units";
-    default:
-      return configName;
-  }
+  return { options, loading, addOption };
 }

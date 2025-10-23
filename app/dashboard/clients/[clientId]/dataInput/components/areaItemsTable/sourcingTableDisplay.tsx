@@ -2,52 +2,19 @@
 
 import { EditableCell } from "./editableCell";
 import { EditableDropdownCell } from "./editableDropdownCell";
+import type { SourcingItem } from "../logic/useSourcingLogic";
 
-/**
- * Columns this shared table renders for all tabs.
- * (We intentionally do NOT include any UUID fields here.)
- */
-type FieldKey =
-  | "store"
-  | "item"
-  | "itemName"
-  | "quantity"
-  | "unit"
-  | "type"
-  | "dimensions"
-  | "notes"
-  | "price";
-
-/** Minimal row shape the table expects across all tabs */
-interface Row {
-  id: string;
-  store?: string;
-  item?: string;
-  itemName?: string;
-  quantity?: number;
-  unit?: string;
-  type?: string;
-  dimensions?: string;
-  approved?: boolean;     // sourcing only
-  notApproved?: boolean;  // sourcing only
-  notes?: string;
-  price?: number;
-  total?: number;
-  // NOTE: any extra fields (processed/paid/UUIDs, etc.) can exist on the object,
-  // but since we don't reference them here, they won't render.
-}
-
-interface TableDisplayProps {
+interface SourcingTableDisplayProps {
   clientId: string;
-  items: Row[];
+  items: SourcingItem[];
   loading: boolean;
-  onUpdate: (id: string, field: FieldKey, value: string) => Promise<void>;
+  onUpdate: (id: string, field: keyof SourcingItem, value: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onToggle: (id: string, field: "approved" | "notApproved") => Promise<void>;
   grandTotal: number;
 }
 
-export default function TableDisplay({
+export default function SourcingTableDisplay({
   clientId,
   items,
   loading,
@@ -55,11 +22,10 @@ export default function TableDisplay({
   onDelete,
   onToggle,
   grandTotal,
-}: TableDisplayProps) {
+}: SourcingTableDisplayProps) {
   return (
     <div className="overflow-x-auto border rounded-lg shadow-sm bg-white">
       <table className="min-w-full text-sm border-collapse">
-        {/* Always render headers */}
         <thead className="bg-gray-100 border-b">
           <tr>
             <th className="p-2 text-left">Store</th>
@@ -69,7 +35,6 @@ export default function TableDisplay({
             <th className="p-2 text-left">Unit</th>
             <th className="p-2 text-left">Type</th>
             <th className="p-2 text-left">Dimensions</th>
-            {/* approval columns render but will be inert in tabs that don't use them */}
             <th className="p-2 text-center">Approved</th>
             <th className="p-2 text-center">Not Approved</th>
             <th className="p-2 text-left">Notes</th>
@@ -95,7 +60,6 @@ export default function TableDisplay({
           ) : (
             items.map((it) => (
               <tr key={it.id} className="border-b hover:bg-gray-50">
-                {/* Store (Firestore-backed dropdown) */}
                 <td className="p-2">
                   <EditableDropdownCell
                     clientId={clientId}
@@ -106,7 +70,6 @@ export default function TableDisplay({
                   />
                 </td>
 
-                {/* Item */}
                 <td className="p-2 text-black">
                   <EditableCell
                     value={it.item ?? ""}
@@ -114,7 +77,6 @@ export default function TableDisplay({
                   />
                 </td>
 
-                {/* Item Name */}
                 <td className="p-2 text-black">
                   <EditableCell
                     value={it.itemName ?? ""}
@@ -122,8 +84,7 @@ export default function TableDisplay({
                   />
                 </td>
 
-                {/* Quantity */}
-                <td className="p-2 text-black w-20">
+                <td className="p-2 w-20 text-black">
                   <EditableCell
                     type="number"
                     value={it.quantity ?? 0}
@@ -131,7 +92,6 @@ export default function TableDisplay({
                   />
                 </td>
 
-                {/* Unit */}
                 <td className="p-2 text-black">
                   <EditableCell
                     value={it.unit ?? ""}
@@ -139,7 +99,6 @@ export default function TableDisplay({
                   />
                 </td>
 
-                {/* Type (Firestore-backed dropdown) */}
                 <td className="p-2 text-black">
                   <EditableDropdownCell
                     clientId={clientId}
@@ -150,7 +109,6 @@ export default function TableDisplay({
                   />
                 </td>
 
-                {/* Dimensions */}
                 <td className="p-2 text-black">
                   <EditableCell
                     value={it.dimensions ?? ""}
@@ -158,8 +116,7 @@ export default function TableDisplay({
                   />
                 </td>
 
-                {/* Approved (noop in tabs that don't support it) */}
-                <td className="p-2 text-center text-black">
+                <td className="p-2 text-center">
                   <input
                     type="checkbox"
                     checked={it.approved ?? false}
@@ -168,7 +125,6 @@ export default function TableDisplay({
                   />
                 </td>
 
-                {/* Not Approved (noop in tabs that don't support it) */}
                 <td className="p-2 text-center">
                   <input
                     type="checkbox"
@@ -178,7 +134,6 @@ export default function TableDisplay({
                   />
                 </td>
 
-                {/* Notes */}
                 <td className="p-2 text-black">
                   <EditableCell
                     value={it.notes ?? ""}
@@ -186,17 +141,14 @@ export default function TableDisplay({
                   />
                 </td>
 
-                {/* Price (rendered; edit via cell or keep as display only if you prefer) */}
-                <td className="p-2 w-28 text-right text-black">
+                <td className="p-2 text-right w-24 text-black">
                   ₱{Number(it.price ?? 0).toLocaleString()}
                 </td>
 
-                {/* Total */}
-                <td className="p-2 font-semibold text-right w-28 text-black">
+                <td className="p-2 text-right font-semibold text-black">
                   ₱{Number(it.total ?? 0).toLocaleString()}
                 </td>
 
-                {/* Delete */}
                 <td className="p-2 text-center">
                   <button
                     onClick={() => onDelete(it.id)}
@@ -210,7 +162,6 @@ export default function TableDisplay({
           )}
         </tbody>
 
-        {/* Footer only when there are rows */}
         {!loading && items.length > 0 && (
           <tfoot className="bg-gray-50 border-t">
             <tr>
@@ -218,7 +169,7 @@ export default function TableDisplay({
                 Grand Total:
               </td>
               <td className="p-2 font-bold text-right">
-                ₱{Number(grandTotal).toLocaleString()}
+                ₱{grandTotal.toLocaleString()}
               </td>
               <td colSpan={2}></td>
             </tr>

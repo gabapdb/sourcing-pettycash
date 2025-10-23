@@ -1,113 +1,75 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { collection, addDoc, getDocs, Timestamp } from "firebase/firestore";
-import { db } from "@/lib/firebase";
-import AreaItemsTable from "../components/areaItemsTable";
+import { useState } from "react";
+import { useSourcingLogic } from "../components/logic/useSourcingLogic";
+import { useSourcingLists } from "../components/logic/useSourcingLists";
+import TableDisplay from "../components/areaItemsTable/tableDisplay";
+import TableForm from "../components/areaItemsTable/tableForm";
 
-interface SourcingListTabProps {
+interface SourcingTabProps {
   clientId: string;
 }
 
-/**
- * 🔹 sourcingListTab.tsx
- * Displays all sourcing areas as switchable tabs.
- */
-export default function SourcingListTab({ clientId }: SourcingListTabProps) {
-  const [areas, setAreas] = useState<{ id: string; name: string }[]>([]);
-  const [newAreaName, setNewAreaName] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [activeArea, setActiveArea] = useState<string | null>(null);
+export default function SourcingListTab({ clientId }: SourcingTabProps) {
+  const { lists, addList } = useSourcingLists(clientId);
+  const [activeListId, setActiveListId] = useState<string | null>(null);
 
-  /** 🔹 Load all areas for this client */
-  const loadAreas = useCallback(async () => {
-    try {
-      const ref = collection(db, "clients", clientId, "sourcingAreas");
-      const snapshot = await getDocs(ref);
-      const list = snapshot.docs.map((docSnap) => ({
-        id: docSnap.id,
-        name: (docSnap.data() as { name: string }).name,
-      }));
-      list.sort((a, b) => a.name.localeCompare(b.name));
-      setAreas(list);
-      if (list.length && !activeArea) setActiveArea(list[0].id);
-    } catch (err) {
-      console.error("Error loading sourcing areas:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [clientId, activeArea]);
-
-  /** 🔹 Add new area */
-  const handleAddArea = useCallback(async () => {
-    const trimmed = newAreaName.trim();
-    if (!trimmed) return;
-
-    try {
-      const ref = collection(db, "clients", clientId, "sourcingAreas");
-      const newDoc = await addDoc(ref, { name: trimmed, createdAt: Timestamp.now() });
-      setNewAreaName("");
-      await loadAreas();
-      setActiveArea(newDoc.id);
-    } catch (err) {
-      console.error("Error adding area:", err);
-    }
-  }, [clientId, newAreaName, loadAreas]);
-
-  useEffect(() => {
-    void loadAreas();
-  }, [loadAreas]);
-
-  if (loading) return <p className="text-gray-500">Loading areas…</p>;
+  // ✅ Always call the hook, handle empty states inside it
+  const sourcingLogic = useSourcingLogic(clientId, activeListId || "");
 
   return (
     <div className="space-y-6">
-      {/* 🔹 Add new area */}
-      <div className="flex items-center gap-2 mb-2">
-        <input
-          value={newAreaName}
-          onChange={(e) => setNewAreaName(e.target.value)}
-          placeholder="Add new area..."
-          className="border border-gray-300 rounded px-3 py-1 text-sm focus:ring-2 focus:ring-blue-400"
-        />
-        <button
-          onClick={handleAddArea}
-          className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700"
+      {/* 🗂 Select or Add Sourcing List */}
+      <div className="flex items-center gap-4 mb-4">
+        <select
+          value={activeListId || ""}
+          onChange={(e) => setActiveListId(e.target.value || null)}
+          className="border border-gray-300 rounded-md px-3 py-2 text-sm bg-white shadow-sm focus:ring-1 focus:ring-blue-500"
         >
-          + Add Area
+          <option value="">Select a sourcing list...</option>
+          {lists.map((list) => (
+            <option key={list.id} value={list.id}>
+              {list.name}
+            </option>
+          ))}
+        </select>
+
+        <button
+          onClick={() => {
+            const name = prompt("Enter new sourcing list name:");
+            if (name) addList(name);
+          }}
+          className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
+        >
+          ➕ New List
         </button>
       </div>
 
-      {/* 🔹 Tab navigation */}
-      {areas.length > 0 && (
-        <div className="flex gap-2 border-b border-gray-200">
-          {areas.map((area) => (
-            <button
-              key={area.id}
-              onClick={() => setActiveArea(area.id)}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeArea === area.id
-                  ? "border-blue-600 text-blue-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              {area.name}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* 🔹 Display selected area table */}
-      {activeArea ? (
-        <div className="mt-4">
-          <AreaItemsTable
-            clientId={clientId}
-            areaId={activeArea}
-            basePath="sourcingAreas"
-          />
+      {/* 🧾 List Content */}
+      {!activeListId ? (
+        <div className="text-gray-500 italic">
+          Select or create a sourcing list to begin.
         </div>
       ) : (
-        <p className="text-gray-500 mt-4">No areas yet. Add one above.</p>
+        <>
+          <div className="border rounded-lg bg-white shadow-sm p-4">
+            <h2 className="text-lg font-semibold mb-3">Add Item</h2>
+            <TableForm onAdd={sourcingLogic.addItem} />
+          </div>
+
+          <div className="border rounded-lg bg-white shadow-sm p-4">
+            <h2 className="text-lg font-semibold mb-3">Sourcing List Items</h2>
+            <TableDisplay
+              clientId={clientId}
+              items={sourcingLogic.items}
+              loading={sourcingLogic.loading}
+              onUpdate={sourcingLogic.updateItem}
+              onDelete={sourcingLogic.deleteItem}
+              onToggle={sourcingLogic.toggleApproval}
+              grandTotal={sourcingLogic.grandTotal}
+            />
+          </div>
+        </>
       )}
     </div>
   );

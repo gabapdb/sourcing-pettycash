@@ -1,21 +1,30 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   collection,
   addDoc,
-  getDocs,
-  deleteDoc,
   updateDoc,
+  deleteDoc,
   doc,
+  onSnapshot,
   Timestamp,
+  query,
+  orderBy,
 } from "firebase/firestore";
+import { useEffect, useState, useCallback } from "react";
 import { db } from "@/lib/firebase";
-import { v4 as uuidv4 } from "uuid";
+import { calcTotal, calcGrandTotal } from "./tableUtils";
+import toast from "react-hot-toast";
+import { useMemo } from "react";
 
+
+
+/**
+ * 🔹 ItemData
+ * Represents one row in a sourcing/petty cash/liquidation table.
+ */
 export interface ItemData {
   id: string;
-  uuid: string;
   sourcingListNo: number;
   store: string;
   item: string;
@@ -32,7 +41,12 @@ export interface ItemData {
   createdAt: Timestamp;
 }
 
-export type EditableField =
+/**
+ * 🔹 EditableField
+ * Type-safe mapping for inline edits.
+ */
+export type EditableField = keyof Pick<
+  ItemData,
   | "sourcingListNo"
   | "store"
   | "item"
@@ -42,163 +56,165 @@ export type EditableField =
   | "type"
   | "dimensions"
   | "notes"
-  | "price";
+  | "price"
+>;
 
 /**
- * 🔹 useTableLogic()
- * Centralized Firestore + state manager for AreaItemsTable.
- * Returns data + CRUD methods for the UI layer to plug in.
+ * 🔹 useTableLogic
+ * Handles all Firestore CRUD + live updates for area items.
  */
 export function useTableLogic(
   clientId: string,
   areaId: string,
-  basePath: "sourcingAreas" | "pettyCashAreas" | "liquidationAreas"
+  basePath: string
 ) {
   const [items, setItems] = useState<ItemData[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const ref = useMemo(
-    () => collection(db, "clients", clientId, basePath, areaId, "items"),
-    [clientId, basePath, areaId]
-  );
+ 
+  const collectionRef = useMemo(
+  () => collection(db, "clients", clientId, basePath, areaId, "items"),
+  [clientId, basePath, areaId]
+);
 
-  /** 🔹 Load all items */
-  const loadItems = useCallback(async () => {
-    setLoading(true);
-    try {
-      const snapshot = await getDocs(ref);
-      const list = snapshot.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<ItemData, "id">),
-      })) as ItemData[];
+  // 🔹 Live listener for Firestore changes
+  useEffect(() => {
+    if (!clientId || !areaId) return;
 
-      list.sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis());
-      setItems(list);
-    } catch (err) {
-      console.error("Error loading items:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [ref]);
+    const q = query(collectionRef, orderBy("createdAt", "asc"));
 
-  /** 🔹 Add a new item */
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const list = snapshot.docs.map((d) => {
+          const data = d.data() as Omit<ItemData, "id">;
+          return { id: d.id, ...data };
+        });
+        setItems(list);
+        setLoading(false);
+      },
+      (err) => {
+        console.error("❌ Firestore listener error:", err);
+        toast.error("Failed to sync data with Firestore.");
+        setLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [clientId, areaId, collectionRef]);
+
+  // 🔹 Add new item
   const addItem = useCallback(
-    async (form: Record<string, string | number>) => {
+    async (data: Partial<ItemData>) => {
       try {
-        const quantity = parseFloat(String(form.quantity));
-        const price = parseFloat(String(form.price));
-        const total = isFinite(quantity * price) ? quantity * price : 0;
+        const quantity = Number(data.quantity) || 0;
+        const price = Number(data.price) || 0;
+        const total = calcTotal(quantity, price);
 
-        await addDoc(ref, {
-          uuid: uuidv4(),
-          sourcingListNo: parseInt(String(form.sourcingListNo)),
-          store: form.store,
-          item: form.item,
-          itemName: form.itemName,
+        await addDoc(collectionRef, {
+          sourcingListNo: Number(data.sourcingListNo) || 0,
+          store: data.store || "",
+          item: data.item || "",
+          itemName: data.itemName || "",
           quantity,
-          unit: form.unit,
-          type: form.type,
-          dimensions: form.dimensions,
+          unit: data.unit || "",
+          type: data.type || "",
+          dimensions: data.dimensions || "",
           approved: false,
           notApproved: false,
-          notes: form.notes,
+          notes: data.notes || "",
           price,
           total,
           createdAt: Timestamp.now(),
         });
 
-        await loadItems();
+        toast.success("Item added successfully!");
       } catch (err) {
-        console.error("Error adding item:", err);
+        console.error("❌ Error adding item:", err);
+        toast.error("Failed to add item. Please try again.");
       }
     },
-    [ref, loadItems]
+    [collectionRef]
   );
 
-  /** 🔹 Delete item */
+  // 🔹 Update field
+  const updateItem = useCallback(
+    async (id: string, field: EditableField, value: string) => {
+      try {
+        const ref = doc(collectionRef, id);
+        let updateData: Record<string, unknown> = { [field]: value };
+
+        if (field === "quantity" || field === "price") {
+          const existing = items.find((it) => it.id === id);
+          if (existing) {
+            const newQuantity =
+              field === "quantity" ? Number(value) || 0 : existing.quantity;
+            const newPrice =
+              field === "price" ? Number(value) || 0 : existing.price;
+            updateData = {
+              ...updateData,
+              total: calcTotal(newQuantity, newPrice),
+            };
+          }
+        }
+
+        await updateDoc(ref, updateData);
+        toast.success("Updated successfully");
+      } catch (err) {
+        console.error("❌ Error updating item:", err);
+        toast.error("Failed to update item.");
+      }
+    },
+    [collectionRef, items]
+  );
+
+  // 🔹 Delete item
   const deleteItem = useCallback(
     async (id: string) => {
       try {
-        await deleteDoc(doc(ref, id));
-        setItems((prev) => prev.filter((i) => i.id !== id));
+        await deleteDoc(doc(collectionRef, id));
+        toast.success("Item deleted");
       } catch (err) {
-        console.error("Error deleting item:", err);
+        console.error("❌ Error deleting item:", err);
+        toast.error("Failed to delete item.");
       }
     },
-    [ref]
+    [collectionRef]
   );
+  
 
-  /** 🔹 Update a single editable field */
-  const updateItem = useCallback(
-    async (id: string, field: EditableField, value: string) => {
-      const current = items.find((i) => i.id === id);
-      if (!current) return;
-
-      let newValue: string | number = value;
-      if (["quantity", "price", "sourcingListNo"].includes(field)) {
-        newValue = parseFloat(value);
-      }
-
-      const updated: Partial<ItemData> = { [field]: newValue } as Partial<ItemData>;
-      if (field === "quantity" || field === "price") {
-        const q = field === "quantity" ? Number(newValue) : current.quantity;
-        const p = field === "price" ? Number(newValue) : current.price;
-        updated.total = q * p;
-      }
-
-      try {
-        await updateDoc(doc(ref, id), updated);
-        setItems((prev) =>
-          prev.map((i) => (i.id === id ? { ...i, ...updated } : i))
-        );
-      } catch (err) {
-        console.error("Error updating item:", err);
-      }
-    },
-    [ref, items]
-  );
-
-  /** 🔹 Toggle approved/notApproved checkboxes */
+  // 🔹 Toggle approved / not approved
   const toggleCheckbox = useCallback(
     async (id: string, field: "approved" | "notApproved") => {
-      const current = items.find((i) => i.id === id);
-      if (!current) return;
-
-      const updated: Partial<ItemData> =
-        field === "approved"
-          ? { approved: !current.approved, notApproved: false }
-          : { notApproved: !current.notApproved, approved: false };
-
       try {
-        await updateDoc(doc(ref, id), updated);
-        setItems((prev) =>
-          prev.map((i) => (i.id === id ? { ...i, ...updated } : i))
-        );
+        const ref = doc(collectionRef, id);
+        const item = items.find((it) => it.id === id);
+        if (!item) return;
+
+        const newValue = !item[field];
+        await updateDoc(ref, {
+          [field]: newValue,
+          ...(field === "approved" && newValue ? { notApproved: false } : {}),
+          ...(field === "notApproved" && newValue ? { approved: false } : {}),
+        });
       } catch (err) {
-        console.error("Error toggling checkbox:", err);
+        console.error("❌ Error toggling checkbox:", err);
+        toast.error("Failed to update approval state.");
       }
     },
-    [ref, items]
+    [collectionRef, items]
   );
 
-  /** 🔹 Derived total */
-  const grandTotal = useMemo(
-    () => items.reduce((sum, i) => sum + (i.total || 0), 0),
-    [items]
-  );
-
-  useEffect(() => {
-    void loadItems();
-  }, [loadItems]);
+  // 🔹 Derived grand total
+  const grandTotal = calcGrandTotal(items);
 
   return {
     items,
     loading,
     addItem,
-    deleteItem,
     updateItem,
+    deleteItem,
     toggleCheckbox,
     grandTotal,
-    reload: loadItems,
   };
 }
